@@ -78,15 +78,20 @@ Design findings:
 1. **Torn reads caused visible flicker.** The 3.7 MB frame write is long enough that a reader hits a mid-write state in 10 to 20% of reads. The first reader showed a one-frame grey slate every 0.3 to 1 s while live. Fix: hold the last good frame for up to 250 ms on a torn read (`LatestGoodFrame`, unit-tested), after which the 40 s timeline had no flicker. For the product, use double buffering so tears cannot happen.
 2. **Do not block inside `RequestSample`.** Waiting for a fresh producer frame there (to pace the camera to the producer) made delivery fail: 3540 undecodable reads and a 1.0 s gap in 60 s.
 3. **Frame repetition and skipping.** The Frame Server requests about 45 samples per second while 30 are delivered, and the producer writes at its own 30 fps clock. On the producer path the counter shows 3 to 15% skipped values and a similar number of repeats (49/1397 and 253/2056 in two runs). Fps, max gap and freezes were all within thresholds, but **this fails the plan's "dropped <= 1%" threshold** and would be visible as judder. Needs a better pacing design in Plan 3 (for example frame timestamps and a non-blocking, timestamp-based pick of the newest frame).
-4. **Camera robustness (open risk).** A Session camera repeatedly stopped starting streams (`MF_E_HW_MFT_FAILED_START_STREAMING 0xC00D3704`) after repeated short client sessions: the 6th, 2nd and 14th session on three different cameras, within 2 to 5 minutes of repeated open/close. Recreating the camera fixed it each time. The cause is not known. The Frame Server also crashed twice (`0xc0000409`, 16:26 and 16:30) while I was replacing the DLL. See section 7 for whether a single continuous session is stable.
+4. **Camera "stops working" episodes: explained (probe artifact).** A Session camera repeatedly stopped starting streams (`MF_E_HW_MFT_FAILED_START_STREAMING 0xC00D3704`) while I was running repeated OpenCV probe sessions. The cause is that the OpenCV probe opens the camera exclusively (see section 6), so overlapping or slowly released probe sessions locked each other out; recreating the camera released them. It is not a fault in the camera. The Frame Server did crash twice (`0xc0000409`, 16:26 and 16:30) while I was replacing the DLL; that is separate and still unexplained.
 ## 6. Compatibility matrix
-| App | Discovered | Restart call app | Restart Windows | 30-min soak | 720p30 | Producer restart | Producer kill → slate → recover | Notes |
-|---|---|---|---|---|---|---|---|---|
-| Zoom | | | | | | | | |
-| Teams | | | | | | | | |
-| Meet (Chrome) | | | | | | | | |
-| Meet (Edge) | | | | | | | | |
-| Discord | | | | | | | | |
+Camera: producer variant (frames from the Rust producer through shared memory), non-elevated Session camera, Windows 11 build 26300. Evidence so far is from the screenshots you took during the session (19:34 to 20:0x); the 30-minute soak and the restart checks are still to do.
+
+| App | Discovered | Picture shown | Alongside other clients | Restart call app | Restart Windows | 30-min soak | 720p30 | Producer kill -> slate -> recover | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+| Zoom | not tested | | | | | | | | Not installed; deferred by the user. Gate cannot pass without it. |
+| Teams (new) | yes, "Gate0 VCam (Windows Virtual Camera)" | **yes** (settings preview) | yes: worked while the browser probe and other apps held the camera | | | | requested NV12 1920x1080 first, then 1280x720 | | Showed BLACK while my OpenCV probe held the camera (see below). Self-view is mirrored (strip appears top-right). |
+| Meet (Chrome) | yes | **yes** via the browser probe (a shared getUserMedia client) | yes (with Teams) | | | | 1280x720 @ ~29 fps delivered | | Probe: 28.7 to 29.1 fps, max gap 0.08 to 0.10 s, 0 freezes/slate/undecodable. Real Meet call not yet tried. |
+| Meet (Edge) | probably (second browser, see notes) | yes if the second screenshot was Edge | yes | | | | | | To confirm which browser the second probe window was. |
+| Discord | yes | **yes after re-selecting** the camera | yes | | | | | | Discord (web, discord.com in Chrome) first showed the real webcam although the dropdown said Gate0 VCam; after switching the dropdown away and back it showed our picture. Desktop app not yet tested. |
+
+Multi-client finding (important for the product and for test method): **opening the camera through OpenCV/Media Foundation (`MFCreateDeviceSource`) takes exclusive control and locks out every other app.** While the OpenCV probe ran, Teams showed a black preview and a second OpenCV client got nothing (`0xC00D3704`). With no exclusive client running, Teams, Chrome, a second browser and Discord all show the camera at the same time. The shared-mode clients (Teams, browsers, Discord) coexist. The earlier "camera stops working after N sessions" episodes were most likely overlapping or slowly released exclusive OpenCV sessions, not a camera fault. All numeric measurements for the matrix therefore use the browser probe (`browser-probe/`), which is a shared client. Chrome pauses video callbacks for hidden or minimized tabs, so the probe window must stay visible.
+
 ## 7. Probe results (per soak)
 All runs: Python probe through OpenCV/Media Foundation (index 1), 1280x720 requested, camera created non-elevated (Session lifetime). Full per-run output is in `probe-runs.md`. Gate thresholds: freeze events 0, max gap <= 0.5 s, dropped <= 1%, undecodable 0, fps >= 27.
 
@@ -113,7 +118,6 @@ Still to verify (Task 8): abrupt kill of the process that holds a Session camera
 Open items at this point:
 - **Zoom: untested** (not installed; deferred by the user). The gate cannot pass without it.
 - **Drop threshold fails on the producer path** (3 to 15% counter gaps/repeats). Not a delivery failure by the other measures, but a real judder risk. See section 5, finding 3.
-- **Camera robustness:** repeated open/close sessions led to `0xC00D3704` until the camera was recreated. See section 5, finding 4.
 - **Frame Server crashes** (`0xc0000409`, twice) while the DLL was being replaced.
 - **Elevation:** DLL registration is an elevated, installer-time step; the camera itself can be created without elevation.
 - Call-app matrix (section 6) and MSIX experiment (section 8) not yet run.
