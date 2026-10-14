@@ -4,8 +4,10 @@
 
 pub mod codec;
 pub mod compositor;
+pub mod config;
 pub mod frame;
 
 pub use codec::{Codec, CodecError, RawCodec};
 pub use compositor::{blend, blend_into, BlendError, ALPHA_ONE};
+pub use config::{Config, ConfigError};
 pub use frame::{Frame, FrameError};
