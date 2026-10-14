@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- THROWAWAY (Gate 0). A minimal full-trust packaged app that can create/remove the virtual camera, to find out what
+     package identity changes: can a packaged app create a System-lifetime camera without elevation? -->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+         xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap3 desktop rescap">
+  <Identity Name="Gate0.VCamSpike" Publisher="CN=Gate0Spike" Version="0.0.1.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>Gate0 VCam Spike</DisplayName>
+    <PublisherDisplayName>Gate0</PublisherDisplayName>
+    <Logo>Assets\logo150.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources><Resource Language="en-us" /></Resources>
+  <Applications>
+    <Application Id="Registrar" Executable="Registrar.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Gate0 VCam Spike" Description="Gate 0 spike" BackgroundColor="transparent"
+                          Square150x150Logo="Assets\logo150.png" Square44x44Logo="Assets\logo44.png" />
+      <Extensions>
+        <!-- Lets us run it from a console WITH package identity (gate0registrar.exe, with lifetime options). -->
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="Registrar.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="gate0registrar.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <DeviceCapability Name="webcam" />
+  </Capabilities>
+</Package>
