@@ -44,6 +44,39 @@ int main() {
     { auto b = MakeBuffer(4, 2, 1, 5000);                // heartbeat in the future must not underflow into "stale"
       assert(TryReadFrame(b.data(), b.size(), 1000, 4, 2, dst.data(), 16, &counter) == ReadStatus::Ok); }
 
+    // --- LatestGoodFrame: a torn read must reuse the previous good frame briefly (no slate flash), but never for long ---
+    {   LatestGoodFrame holder(4 * 4 * 2);
+        auto good = MakeBuffer(4, 2, 10, 1000);
+        uint64_t c = 0;
+        const uint8_t* f = holder.Update(good.data(), good.size(), 1100, 4, 2, &c);
+        assert(f && c == 10 && f[0] == 64);
+
+        auto torn = MakeBuffer(4, 2, 11, 1100, /*seq=*/3);
+        f = holder.Update(torn.data(), torn.size(), 1133, 4, 2, &c);
+        assert(f && c == 10 && f[0] == 64);                       // previous good frame, not a torn mixture
+
+        f = holder.Update(torn.data(), torn.size(), 1100 + kStaleAfterMs + 1, 4, 2, &c);
+        assert(f == nullptr);                                     // torn for too long -> slate
+    }
+    {   LatestGoodFrame holder(4 * 4 * 2);                        // nothing good yet: torn must not invent a frame
+        auto torn = MakeBuffer(4, 2, 1, 1000, 3);
+        uint64_t c = 0;
+        assert(holder.Update(torn.data(), torn.size(), 1010, 4, 2, &c) == nullptr);
+    }
+    {   LatestGoodFrame holder(4 * 4 * 2);                        // a size change is not a torn read: never hold across it
+        auto good = MakeBuffer(4, 2, 10, 1000);
+        auto wrong = MakeBuffer(8, 2, 11, 1010);
+        uint64_t c = 0;
+        assert(holder.Update(good.data(), good.size(), 1020, 4, 2, &c) != nullptr);
+        assert(holder.Update(wrong.data(), wrong.size(), 1030, 4, 2, &c) == nullptr);
+    }
+    {   LatestGoodFrame holder(4 * 4 * 2);                        // producer stopped: stale means slate even though a good frame exists
+        auto good = MakeBuffer(4, 2, 10, 1000);
+        uint64_t c = 0;
+        assert(holder.Update(good.data(), good.size(), 1020, 4, 2, &c) != nullptr);
+        assert(holder.Update(good.data(), good.size(), 1020 + kStaleAfterMs + 50, 4, 2, &c) == nullptr);
+    }
+
     std::puts("SharedFrameTests: all passed");
     return 0;
 }

@@ -12,9 +12,6 @@
 // "Global\gate0-vcam-frames" is 24 characters plus the terminator; catches a lost backslash escape.
 static_assert(sizeof(GATE0_SECTION_NAME) == 25 * sizeof(wchar_t), "GATE0_SECTION_NAME escape error");
 #endif
-#ifndef GATE0_DLL_CREATES
-#define GATE0_DLL_CREATES false     // experiment A: producer creates the section; B: build with /DGATE0_DLL_CREATES=true
-#endif
 #endif
 
 HRESULT SimpleFrameGenerator::Initialize(_In_ IMFMediaType* pMediaType)
@@ -92,26 +89,24 @@ HRESULT SimpleFrameGenerator::_CreateRGB32Frame(
 
 #ifdef GATE0_USE_PRODUCER
     {
-        // Producer mode: copy the producer's 1280x720 frame (scaled to the negotiated size) or show a flat slate. Never a stale frame.
+        // Producer mode: show the producer's 1280x720 frame (scaled to the negotiated size) or a flat slate.
+        // LatestGoodFrame reuses the previous good frame for a torn read (<= 250 ms) and returns nullptr for anything else
+        // that is not a fresh good frame, so a dead or hung producer shows the slate within 250 ms, never a frozen "live" frame.
         constexpr uint32_t kSrcW = 1280, kSrcH = 720;
         constexpr size_t kMapBytes = gate0::kHeaderBytes + static_cast<size_t>(kSrcW) * kSrcH * 4;
         static gate0::SharedSection s_section;
-        static std::vector<uint8_t> s_src(static_cast<size_t>(kSrcW) * kSrcH * 4);
+        static gate0::LatestGoodFrame s_latest(static_cast<size_t>(kSrcW) * kSrcH * 4);
         uint64_t producerCounter = 0;
-        gate0::ReadStatus st = gate0::ReadStatus::BadHeader;
-        if (s_section.EnsureOpen(GATE0_SECTION_NAME, kMapBytes, GATE0_DLL_CREATES))
-        {
-            for (int attempt = 0; attempt < 3; ++attempt)
-            {
-                st = gate0::TryReadFrame(s_section.base(), s_section.size(), GetTickCount64(), kSrcW, kSrcH, s_src.data(), kSrcW * 4, &producerCounter);
-                if (st != gate0::ReadStatus::Torn) break;
-            }
-        }
-        if (st == gate0::ReadStatus::Ok)
+        const uint8_t* src = nullptr;
+        // Mode is chosen at run time by a flag file so experiments need no reinstall: present = this DLL creates the section.
+        const bool dllCreates = GetFileAttributesW(L"C:\\ProgramData\\Gate0VCam\\dllcreates.flag") != INVALID_FILE_ATTRIBUTES;
+        if (s_section.EnsureOpen(GATE0_SECTION_NAME, kMapBytes, dllCreates))
+            src = s_latest.Update(s_section.base(), s_section.size(), GetTickCount64(), kSrcW, kSrcH, &producerCounter);
+        if (src != nullptr)
         {
             for (DWORD y = 0; y < height; ++y)
             {
-                const uint32_t* srcRow = reinterpret_cast<const uint32_t*>(s_src.data()) + static_cast<size_t>(y * kSrcH / height) * kSrcW;
+                const uint32_t* srcRow = reinterpret_cast<const uint32_t*>(src) + static_cast<size_t>(y * kSrcH / height) * kSrcW;
                 uint32_t* dstRow = reinterpret_cast<uint32_t*>(pBuf + static_cast<size_t>(y) * pitch);
                 for (DWORD x = 0; x < width; ++x) dstRow[x] = srcRow[x * kSrcW / width];
             }

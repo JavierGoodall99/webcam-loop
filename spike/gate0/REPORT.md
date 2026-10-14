@@ -28,7 +28,30 @@ Findings that differ from the plan's assumptions:
 - Build recipe that works: NuGet packages are restored per project (`msbuild <proj> /t:Restore /p:RestorePackagesConfig=true`) and then placed in `vcam-sample\packages` with directory junctions from each project's `packages` folder (the project mixes `..\packages` and `packages` paths). The solution file cannot be restored because it references `Samples/Shared/CameraKsPropertyHelper`, which is outside the sparse checkout and not needed (UWP app only).
 - Built successfully, Release x64: `VirtualCameraMediaSource\x64\Release\VirtualCameraMediaSource.dll` and `VirtualCamera_Installer\x64\Release\VirtualCamera_Installer.exe` (MSVC 19.44, SDK 10.0.26100.0, platform toolset v143).
 ## 3. Registration and elevation
+Measured on Windows 11 build 26300, non-elevated user account (member of Administrators, UAC on).
+
+| Step | Elevation needed? | Result |
+|---|---|---|
+| Copy DLL to `C:\Program Files\Gate0VCam\` and write `HKLM\SOFTWARE\Classes\CLSID\{7B89B92E-...}\InProcServer32` (the MSI's job) | **Yes** (HKLM write) | Done once via a UAC prompt (`scripts/gate0-register.ps1`). The Frame Server can find the media source only through this HKLM key. |
+| `MFCreateVirtualCamera` + `Start`, lifetime **Session**, access **CurrentUser** (`registrar/Registrar.cpp`) | **No** | Works. Camera exists while the creating process runs; `--stop` removes it cleanly and it disappears from capture enumeration. |
+| Sample installer with lifetime **System**, access CurrentUser | Fails non-elevated: `E_ACCESSDENIED 0x80070005`, "Please run application in elevated mode" | The failing call is the sample's own `AddProperty(DEVPKEY_DeviceInterface_VCamCreate_SourceId...)` bookkeeping, after `MFCreateVirtualCamera` already succeeded. The sample also logs "not running in app package", which suggests System-lifetime cameras are meant to be created by a packaged app or an elevated process. Not yet tested whether an MSIX-packaged app can create a System-lifetime camera (Task 9). |
+| Replacing the installed DLL while it has been loaded by the Frame Server | **Yes**, and it needs a `FrameServer` service restart | The DLL stays locked after the camera is removed. The register script retries after `Stop-Service FrameServer` (briefly interrupts all camera apps). Matters for upgrades (Task 8). |
+
+Implication for the product: the camera DLL registration is an installer-time, elevated step. Creating the camera itself can be done by the normal-user app (Session lifetime) while the app runs.
 ## 4. Formats and resolutions offered
+Source offers (after our change to the sample): NV12 and RGB32 at 1280x720, 640x360, 1920x1080 and 640x480, all 30 fps.
+
+Observed through OpenCV/Media Foundation (index 1, `probe`), requested size -> delivered size -> strip block size (8 px = native render at 1280x720; other values mean the picture was scaled):
+
+| Requested | Delivered | Strip block | Reading |
+|---|---|---|---|
+| 1280x720 | 1280x720 | 8 px | native |
+| 1920x1080 | 1920x1080 | 12 px | scaled 1.5x from the 720p render (not a native 1080p stream) |
+| 640x360 | 640x360 | 4 px | scaled 0.5x from the 720p render |
+| 320x240 | 640x360 | 4 px | falls back to 640x360, scaled |
+| 640x480, 1024x576 | 640x480 | strip not found | 4:3 output; strip is cropped or letterboxed, picture otherwise fine |
+
+Finding: the Frame Server renders one native size and scales it for clients that ask for another. The product should offer the sizes it can actually render and not rely on per-size negotiation. Remaining per-app choices are recorded in the matrix (Task 7).
 ## 5. Shared-memory / Frame Server findings
 ## 6. Compatibility matrix
 | App | Discovered | Restart call app | Restart Windows | 30-min soak | 720p30 | Producer restart | Producer kill → slate → recover | Notes |

@@ -94,6 +94,19 @@ unsafe fn publish(s: &Section, counter: u64) {
     seq.fetch_add(1, Ordering::Release); // even: done
 }
 
+unsafe fn apply_header_fault(s: &Section, fault: &str) {
+    let put32 = |o: usize, v: u32| (s.base.add(o) as *mut u32).write_unaligned(v);
+    match fault {
+        "size" => {
+            put32(8, 1920);
+            put32(12, 1080);
+            put32(16, 7680);
+        }
+        "magic" => put32(0, 0xDEAD_BEEF),
+        _ => {}
+    }
+}
+
 fn main() {
     let name = HSTRING::from(arg("--name", "Global\\gate0-vcam-frames"));
     let mode = arg("--mode", "create");
@@ -115,11 +128,47 @@ fn main() {
     };
     eprintln!("producer running, mode={mode}, {W}x{H} @ {fps} fps");
 
+    // Simulates a section left behind by a writer that died mid-update (sequence number odd). The Frame Server DLL keeps the
+    // section alive across producer crashes, so a new producer can inherit this state.
+    if env::args().any(|a| a == "--poison-seq") {
+        unsafe { (*(section.base.add(24) as *const AtomicU32)).store(7, Ordering::Release) };
+        eprintln!("poisoned: sequence left odd");
+    }
+
+    // A previous writer may have died mid-update. Its odd sequence would invert parity for every later reader
+    // ("writing" whenever the writer is idle), so make it even before the first publish.
+    unsafe {
+        let seq = &*(section.base.add(24) as *const AtomicU32);
+        let s = seq.load(Ordering::Acquire);
+        if s & 1 == 1 {
+            seq.store(s.wrapping_add(1), Ordering::Release);
+        }
+    }
+
+    // Fault injection for the Review Focus cases: none | size | magic | stuck-seq | hang
+    let fault = arg("--fault", "none");
+    eprintln!("fault mode: {fault}");
+
     let interval = Duration::from_micros(1_000_000 / fps);
     let mut next = Instant::now();
     let mut counter: u64 = 0;
     loop {
-        unsafe { publish(&section, counter) };
+        match fault.as_str() {
+            // Process alive but no longer writing (frozen capture thread).
+            "hang" if counter >= 60 => {}
+            // Writer died mid-update: seq stays odd while the heartbeat keeps moving.
+            "stuck-seq" if counter >= 60 => unsafe {
+                let seq = &*(section.base.add(24) as *const AtomicU32);
+                if seq.load(Ordering::Relaxed) & 1 == 0 {
+                    seq.fetch_add(1, Ordering::AcqRel);
+                }
+                (section.base.add(40) as *mut u64).write_unaligned(GetTickCount64());
+            },
+            _ => unsafe {
+                publish(&section, counter);
+                apply_header_fault(&section, &fault);
+            },
+        }
         counter += 1;
         next += interval;
         if let Some(d) = next.checked_duration_since(Instant::now()) {

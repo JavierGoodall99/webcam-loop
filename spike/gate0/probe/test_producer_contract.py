@@ -75,3 +75,20 @@ def test_reader_refuses_when_producer_is_gone(producer, tmp_path):
     time.sleep(1.3)   # longer than the 1 s staleness window
     code, _ = read_once(name, tmp_path / "y.bgra")
     assert code in (EXIT_STALE, EXIT_ABSENT)
+
+
+def test_new_producer_recovers_a_section_left_with_an_odd_sequence(tmp_path):
+    # A writer that died mid-update leaves the sequence odd ("writing"). The Frame Server DLL keeps the section alive
+    # across producer crashes, so the next producer inherits it. With the odd sequence left alone no read can ever succeed
+    # (0%); once it is repaired most reads succeed. A minority still hit a genuine mid-write tear, so assert a rate.
+    name = f"Local\\gate0-contract-{uuid.uuid4().hex[:8]}"
+    proc = subprocess.Popen([str(PRODUCER), "--name", name, "--fps", "60", "--poison-seq"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for_frame(name, tmp_path / "first.bgra", timeout=8.0)
+        results = [read_once(name, tmp_path / f"r{i}.bgra")[0] for i in range(40)]
+        ok = results.count(EXIT_OK)
+        assert ok >= 20, f"only {ok}/40 reads succeeded: {results}"
+    finally:
+        proc.kill()
+        proc.wait()
