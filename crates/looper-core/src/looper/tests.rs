@@ -211,19 +211,84 @@ fn releasing_without_having_pressed_does_nothing_in_any_state() {
 }
 
 #[test]
-fn recording_while_looping_replaces_the_loop() {
+fn recording_while_looping_keeps_the_old_loop_on_air_and_then_replaces_it() {
     let mut l = looper(3, 100, 0);
     record(&mut l, &[10, 20, 30, 40]);
-    assert_eq!(l.state(), State::Loop);
     l.pedal_down();
     assert_eq!(l.state(), State::Recording);
-    assert_eq!(blues(&feed(&mut l, &[100, 110, 120])), vec![100, 110, 120]); // live while recording
+    // The old loop keeps playing while the new one is recorded, so viewers never see a jump to live.
+    let outs = feed(&mut l, &[100, 110, 120]);
+    assert_eq!(blues(&outs), vec![10, 20, 30]);
+    assert!(outs.iter().all(|o| o.state == State::Recording));
     l.pedal_up().unwrap();
     assert_eq!(l.state(), State::Loop);
     assert_eq!(
         blues(&feed(&mut l, &[0; 7])),
         vec![100, 110, 120, 100, 110, 120, 100]
     ); // the old loop is gone
+}
+
+#[test]
+fn a_tap_shorter_than_the_minimum_while_looping_leaves_the_loop_playing_without_a_jump() {
+    let mut l = looper(3, 100, 0);
+    record(&mut l, &[10, 20, 30, 40]);
+    assert_eq!(blues(&feed(&mut l, &[0])), vec![10]);
+    l.pedal_down();
+    assert_eq!(blues(&feed(&mut l, &[0])), vec![20]); // one frame recorded, the loop is still on air
+    l.pedal_up().unwrap(); // too short: ignored
+    assert_eq!(l.state(), State::Loop);
+    assert_eq!(l.loop_len(), 4);
+    assert_eq!(blues(&feed(&mut l, &[0; 3])), vec![30, 40, 10]); // carries on from where it was
+}
+
+#[test]
+fn a_tap_with_no_frames_at_all_while_looping_also_leaves_the_loop_alone() {
+    let mut l = looper(3, 100, 0);
+    record(&mut l, &[10, 20, 30, 40]);
+    l.pedal_down();
+    l.pedal_up().unwrap();
+    assert_eq!(l.state(), State::Loop);
+    assert_eq!(blues(&feed(&mut l, &[0; 2])), vec![10, 20]);
+}
+
+#[test]
+fn go_live_while_re_recording_cancels_the_recording_and_dissolves_from_the_old_loop() {
+    let mut l = looper(3, 100, 2);
+    record(&mut l, &[10, 20, 30, 40, 50, 60]); // a loop of 4
+    l.pedal_down();
+    feed(&mut l, &[200, 200]);
+    l.go_live();
+    assert_eq!(l.state(), State::Returning);
+    let outs = feed(&mut l, &[200, 200, 200]);
+    assert_eq!(outs[0].state, State::Returning);
+    assert_eq!(outs[1].state, State::Live);
+    assert_eq!(
+        outs[2],
+        Output {
+            frame: px(200),
+            state: State::Live
+        }
+    );
+    assert_eq!(l.loop_len(), 0);
+}
+
+#[test]
+fn a_resolution_change_while_re_recording_drops_everything_and_shows_live() {
+    let mut l = looper(3, 100, 0);
+    record(&mut l, &[10, 20, 30, 40]);
+    l.pedal_down();
+    let bigger = Frame::solid(3, 3, [9, 9, 9, 255]).unwrap();
+    let out = l.process(&bigger).unwrap();
+    assert_eq!(
+        out,
+        Output {
+            frame: bigger,
+            state: State::Live
+        }
+    );
+    l.pedal_up().unwrap();
+    assert_eq!(l.state(), State::Live);
+    assert_eq!(l.loop_len(), 0);
 }
 
 #[test]

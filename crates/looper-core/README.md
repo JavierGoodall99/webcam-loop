@@ -10,11 +10,12 @@ States: `Live`, `Recording`, `Loop`, `Returning` (the dissolve back to live).
 
 | event \ state | Live | Recording | Loop | Returning |
 |---|---|---|---|---|
-| `pedal_down` | start recording | ignored (key repeat) | start recording (the old loop is dropped) | start recording |
-| `pedal_up` | ignored | make the loop, or ignore if shorter than the minimum | ignored | ignored |
-| `go_live` | ignored | cancel the recording | start the dissolve to live | ignored |
+| `pedal_down` | start recording | ignored (key repeat) | start recording; the loop stays on air | start recording |
+| `pedal_up` | ignored | make the loop, or ignore if shorter than the minimum (a loop on air carries on) | ignored | ignored |
+| `go_live` | ignored | cancel the recording (a loop on air dissolves into live) | start the dissolve to live | ignored |
 
-- The output while recording is always the live frame.
+- The output while recording is the live frame, except when recording over a loop: that loop stays on air until the new
+  recording replaces it, so an accidental tap never exposes the live feed.
 - A recording that reaches its frame cap or byte budget ends by itself and starts looping; the later key release is harmless.
 - **The loop** is the recording with its last `k` frames dissolved into its first `k` and then dropped, so playback wraps
   without a jump. It starts at its first frame, which is nearly the tail of the recording.
@@ -63,7 +64,7 @@ looper.go_live();                        // dissolve back to the live feed
 
 ```
 ./check.sh               # fmt, clippy (warnings are errors), tests, docs
-./check.sh --mutation    # also breaks the code in 10 ways and confirms the tests notice each one
+./check.sh --mutation    # also breaks the code in 13 ways and confirms the tests notice each one
 cargo run --release --example bench
 ```
 

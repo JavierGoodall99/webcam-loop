@@ -2379,3 +2379,18 @@ git commit -m "feat(looper-core): quality gates, README, benchmark and mutation 
 **Review Focus:** each of the five items is pinned by named tests (see the list above) and by the mutation check.
 
 **Known limits:** `RawCodec` is for tests only; the product needs a compressing codec (Plan 3). Frame pacing against the camera clock is not this crate's problem (Gate 0's open issue). Nothing here touches Windows.
+
+---
+
+## Amendment after the final review (applied during execution)
+
+**Decision 7 was wrong and was changed.** The plan said: "Pressing record during a loop drops the old loop at once and starts recording; the output shows live while recording." The final review found that this makes an accidental tap on the record key during a loop switch the camera to **live video** and lose the loop, which contradicts the spec's "holds shorter than a minimum are ignored" and is the worst possible failure for someone using a loop to step away from a call.
+
+**New behaviour (now in the code):**
+- Pressing record while a loop is on air keeps that loop playing while the new recording is made (`State::Recording`, but the frame shown is the old loop).
+- A hold shorter than the minimum is ignored and the old loop carries on from where it was, with no jump.
+- A hold long enough replaces the loop (a hard cut to the new loop's first frame).
+- `go_live` during a re-recording cancels the recording and dissolves the old loop into the live feed.
+- A camera size change at any point abandons everything and shows live (decision 9, unchanged).
+
+**Code and tests:** `Recording` gained an `over: Option<Playback>` field; `pedal_down`, `pedal_up`, `go_live` and the recording branch of `process` changed. The test `recording_while_looping_replaces_the_loop` became `recording_while_looping_keeps_the_old_loop_on_air_and_then_replaces_it`, and four tests were added: a short tap while looping, a tap with no frames, go-live during a re-recording, and a resolution change during a re-recording (71 unit tests in all). The mutation tool gained four mutations for these rules (13 in all, all caught). The code blocks above in Task 6 and Task 7 show the pre-amendment versions; the repo is the source of truth.

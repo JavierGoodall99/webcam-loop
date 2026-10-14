@@ -5,17 +5,20 @@
 //!
 //! ```text
 //!   Live --pedal_down--> Recording --pedal_up (long enough)--> Loop --go_live--> Returning --k frames--> Live
-//!                           |  \--pedal_up (too short)--> Live          \--pedal_down--> Recording (replaces the loop)
+//!                           |  \--pedal_up (too short)--> Live          \--pedal_down--> Recording (the loop stays on air)
 //!                           \--go_live--> Live (recording discarded)
 //! ```
 //!
+//! While a loop is on air, pressing record keeps that loop playing until the new recording replaces it; a hold that is
+//! too short is ignored and the loop carries on, and go-live dissolves the loop into the live feed.
+//!
 //! | event \ state | Live | Recording | Loop | Returning |
 //! |---|---|---|---|---|
-//! | `pedal_down` | start recording | ignored (key repeat) | start recording | start recording |
-//! | `pedal_up` | ignored | commit the loop, or ignore if shorter than the minimum | ignored | ignored |
-//! | `go_live` | ignored | cancel the recording | start the dissolve to live | ignored |
+//! | `pedal_down` | start recording | ignored (key repeat) | start recording; the loop stays on air | start recording |
+//! | `pedal_up` | ignored | commit the loop, or ignore if shorter than the minimum (a loop on air carries on) | ignored | ignored |
+//! | `go_live` | ignored | cancel the recording (a loop on air dissolves into live) | start the dissolve to live | ignored |
 //!
-//! Output while recording is always the live frame. A recording that reaches its frame or byte cap ends by itself and
+//! Output while recording is the live frame, or the loop that was already on air if recording over one. A recording that reaches its frame or byte cap ends by itself and
 //! starts looping. A change of live frame size while recording, looping or returning abandons the loop and shows live.
 
 use crate::codec::{Codec, CodecError};
@@ -73,6 +76,9 @@ struct Recording {
     frames: Vec<Vec<u8>>,
     bytes: usize,
     dims: Option<(u32, u32)>,
+    /// The loop that was playing when recording started. It stays on air until the new recording replaces it, and
+    /// comes back if the hold turns out to be too short, so an accidental tap never exposes the live feed.
+    over: Option<Playback>,
 }
 
 struct Playback {
@@ -135,19 +141,27 @@ impl<C: Codec> Looper<C> {
         }
     }
 
-    /// The record key went down. Starts a recording unless one is already running (key repeat).
+    /// The record key went down. Starts a recording unless one is already running (key repeat). If a loop is
+    /// playing it stays on air while the new recording is made.
     pub fn pedal_down(&mut self) {
-        if !matches!(self.mode, Mode::Recording(_)) {
-            self.mode = Mode::Recording(Recording {
-                frames: Vec::new(),
-                bytes: 0,
-                dims: None,
-            });
-        }
+        let over = match std::mem::replace(&mut self.mode, Mode::Live) {
+            Mode::Recording(running) => {
+                self.mode = Mode::Recording(running);
+                return;
+            }
+            Mode::Loop(play) => Some(play),
+            Mode::Live | Mode::Returning { .. } => None,
+        };
+        self.mode = Mode::Recording(Recording {
+            frames: Vec::new(),
+            bytes: 0,
+            dims: None,
+            over,
+        });
     }
 
-    /// The record key went up. Turns a long-enough recording into a loop; ignores one that is too short.
-    /// On an error the looper is left showing live video.
+    /// The record key went up. Turns a long-enough recording into a loop; a hold that is too short is ignored, and
+    /// a loop that was playing carries on. On an error the looper is left showing live video.
     pub fn pedal_up(&mut self) -> Result<(), LooperError> {
         match std::mem::replace(&mut self.mode, Mode::Live) {
             Mode::Recording(rec) => {
@@ -155,6 +169,8 @@ impl<C: Codec> Looper<C> {
                     && rec.frames.len() >= self.config.min_record_frames as usize
                 {
                     self.mode = self.commit(rec)?;
+                } else if let Some(play) = rec.over {
+                    self.mode = Mode::Loop(play);
                 }
                 Ok(())
             }
@@ -165,10 +181,14 @@ impl<C: Codec> Looper<C> {
         }
     }
 
-    /// The go-live key was pressed.
+    /// The go-live key was pressed. Cancels a recording in progress; if a loop was on air under it, that loop
+    /// dissolves into the live feed.
     pub fn go_live(&mut self) {
         self.mode = match std::mem::replace(&mut self.mode, Mode::Live) {
-            Mode::Recording(_) => Mode::Live,
+            Mode::Recording(rec) => match rec.over {
+                Some(play) if self.config.crossfade_frames > 0 => Mode::Returning { play, step: 0 },
+                _ => Mode::Live,
+            },
             Mode::Loop(play) => {
                 if self.config.crossfade_frames == 0 {
                     Mode::Live
@@ -195,6 +215,19 @@ impl<C: Codec> Looper<C> {
                     }
                     Some(_) => {}
                 }
+                // What viewers see meanwhile: the loop that was playing, if any, otherwise the live feed.
+                let shown = match rec.over.as_mut() {
+                    Some(play) if play.dims == live_dims => {
+                        let frame = self.decode_current(play)?;
+                        play.pos = (play.pos + 1) % play.frames.len();
+                        frame
+                    }
+                    Some(_) => {
+                        // The camera changed size under the loop on air: abandon everything and show live.
+                        return Ok(self.finish(live.clone(), Mode::Live));
+                    }
+                    None => live.clone(),
+                };
                 let bytes = self.codec.encode(live);
                 rec.bytes = rec.bytes.saturating_add(bytes.len());
                 rec.frames.push(bytes);
@@ -205,7 +238,7 @@ impl<C: Codec> Looper<C> {
                 } else {
                     Mode::Recording(rec)
                 };
-                Ok(self.finish(live.clone(), next))
+                Ok(self.finish(shown, next))
             }
 
             Mode::Loop(mut play) => {
