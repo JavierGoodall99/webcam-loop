@@ -175,4 +175,6 @@ Gate criteria, status:
 
 **Recommended next step:** test Zoom, then write Plan 2 (looper and compositor, pure logic, no camera needed) in parallel with a focused spike on frame pacing, since pacing is the biggest remaining unknown. Plan 3 (the desktop app and the real camera DLL) must implement the spec section 11 requirements (DLL-created section, double buffering, single-instance guard, installer model, client-capacity test).
 
-**Cleanup state:** the spike left a DLL under `C:\Program Files\Gate0VCam\`, an HKLM CLSID key, flag files in `C:\ProgramData\Gate0VCam\`, and the camera, producer and probe server running. `scripts/gate0-unregister.ps1` removes the system parts (needs elevation). The throwaway MSIX test package and both copies of its certificate were already removed.
+**Cleanup state (verified 21:5x):** everything the spike installed has been removed: the HKLM CLSID key, `C:\Program Files\Gate0VCam`, `C:\ProgramData\Gate0VCam`, the throwaway MSIX package and both copies of its certificate, and all spike processes. No virtual camera remains and the camera services are running. To repeat any test, rebuild and re-register from the repo (`README.md`).
+
+**Not recorded:** the second browser's (apparently Edge) 10-minute probe run was never saved. Its tab was most likely put to sleep by the browser and was abandoned at the user's request; only its first seconds (30.14 fps, no gaps, see section 6) were seen in a screenshot.
