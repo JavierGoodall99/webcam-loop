@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gate 0 browser probe</title>
+<style>
+  :root { --bg:#14161a; --fg:#e8eaed; --muted:#9aa0a6; --ok:#34a853; --bad:#ea4335; --card:#1f2228; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
+  h1 { font-size:18px; margin:0 0 12px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; }
+  select, input, button { background:var(--card); color:var(--fg); border:1px solid #3c4043; border-radius:6px; padding:6px 10px; font:inherit; }
+  button { cursor:pointer; }
+  video { width:480px; max-width:100%; background:#000; border-radius:8px; }
+  table { border-collapse:collapse; margin-top:12px; }
+  td { padding:3px 14px 3px 0; }
+  td:first-child { color:var(--muted); }
+  .pass { color:var(--ok); font-weight:600; } .fail { color:var(--bad); font-weight:600; }
+  #state { margin:8px 0; min-height:1.4em; }
+</style>
+</head>
+<body>
+<h1>Gate 0 browser probe <span style="color:var(--muted);font-weight:400">(shared-mode camera client)</span></h1>
+<div class="row">
+  <label>Camera <select id="cam"></select></label>
+  <label>Size <select id="size"><option>1280x720</option><option>1920x1080</option><option>640x360</option></select></label>
+  <label>Minutes <input id="minutes" type="number" min="0.1" step="0.1" value="1" style="width:5em"></label>
+  <label>Label <input id="label" value="browser-run"></label>
+  <label><input id="drops" type="checkbox" checked> gate on dropped frames</label>
+  <button id="start">Start</button><button id="stop" disabled>Stop &amp; save</button>
+</div>
+<div id="state">Pick the camera (the label shows after permission is granted) and press Start.</div>
+<video id="v" muted playsinline></video>
+<table id="stats"></table>
+<script type="module">
+import { decodeStripRow, summarize, gateFailures, MARKER_LIVE, MARKER_SLATE } from './strip-codec.mjs';
+
+const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+for (const k of ['minutes', 'label']) if (params.has(k)) $(k).value = params.get(k);
+if (params.get('drops') === '0') $('drops').checked = false;
+
+let stream = null, samples = [], t0 = 0, running = false, timer = null, canvas = null, ctx = null;
+
+async function loadDevices() {
+  // Labels are only visible after one permission grant.
+  try { (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach((t) => t.stop()); } catch (e) { $('state').textContent = 'Camera permission needed: ' + e.message; }
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+  $('cam').innerHTML = devs.map((d) => `<option value="${d.deviceId}">${d.label || d.deviceId}</option>`).join('');
+  const gate = devs.find((d) => /gate0/i.test(d.label));
+  if (gate) $('cam').value = gate.deviceId;
+  if (params.get('autostart') === '1' && gate) start();
+}
+
+function render(final = false) {
+  const s = summarize(samples);
+  const fails = gateFailures(s, { checkDrops: $('drops').checked });
+  const rows = [
+    ['elapsed', s.durationS.toFixed(1) + ' s'], ['frames', s.frames], ['fps', s.fps.toFixed(2)],
+    ['max gap', s.maxGapS.toFixed(3) + ' s'], ['dropped (counter gaps)', s.dropped], ['repeats', s.repeats],
+    ['freeze events', s.freezeEvents], ['slate frames', s.slateFrames], ['undecodable frames', s.invalidFrames],
+    ['gate', fails.length ? `<span class="fail">FAIL: ${fails.join('; ')}</span>` : '<span class="pass">PASS so far</span>'],
+  ];
+  $('stats').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  return { summary: s, failures: fails };
+}
+
+async function start() {
+  if (running) return;
+  const [w, h] = $('size').value.split('x').map(Number);
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { deviceId: { exact: $('cam').value }, width: { exact: w }, height: { exact: h }, frameRate: { ideal: 30 } },
+  });
+  const track = stream.getVideoTracks()[0];
+  const settings = track.getSettings();
+  const v = $('v');
+  v.srcObject = stream;
+  await v.play();
+  canvas = new OffscreenCanvas(settings.width, settings.height);
+  ctx = canvas.getContext('2d', { willReadFrequently: true });
+  samples = []; running = true; t0 = performance.now();
+  $('start').disabled = true; $('stop').disabled = false;
+  $('state').textContent = `Running: ${track.label} at ${settings.width}x${settings.height} @ ${settings.frameRate} fps`;
+  const onFrame = (now) => {
+    if (!running) return;
+    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+    const row = ctx.getImageData(0, 1, canvas.width, 1).data;
+    const d = decodeStripRow(row, canvas.width);
+    samples.push([(now - t0) / 1000, d ? d.marker : null, d ? d.counter : null]);
+    v.requestVideoFrameCallback(onFrame);
+  };
+  v.requestVideoFrameCallback(onFrame);
+  timer = setInterval(() => { render(); if ((performance.now() - t0) / 60000 >= Number($('minutes').value)) stop(); }, 1000);
+}
+
+async function stop() {
+  if (!running) return;
+  running = false; clearInterval(timer);
+  stream.getTracks().forEach((t) => t.stop());
+  const { summary, failures } = render(true);
+  const payload = { label: $('label').value, camera: $('cam').selectedOptions[0]?.textContent, size: $('size').value,
+                    minutesRequested: Number($('minutes').value), checkDrops: $('drops').checked,
+                    userAgent: navigator.userAgent, summary, failures };
+  try {
+    const r = await fetch('/result?label=' + encodeURIComponent($('label').value), { method: 'POST', body: JSON.stringify(payload) });
+    $('state').textContent = r.ok ? 'Stopped. Result saved by the local server.' : 'Stopped. Save failed: ' + r.status;
+  } catch (e) { $('state').textContent = 'Stopped. Save failed: ' + e.message; }
+  $('start').disabled = false; $('stop').disabled = true;
+}
+
+$('start').onclick = () => start().catch((e) => { $('state').textContent = 'Start failed: ' + e.name + ' ' + e.message; });
+$('stop').onclick = stop;
+loadDevices();
+</script>
+</body>
+</html>
