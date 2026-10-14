@@ -1,6 +1,6 @@
 # Gate 0 report
 
-Decision: NOT YET DECIDED
+Decision: OPEN. Not passed. The native Windows 11 virtual camera looks viable, but Zoom is untested and frame pacing misses the 1% threshold (details in section 11).
 
 ## 1. Environment
 | Item | Value |
@@ -85,7 +85,7 @@ Camera: producer variant (frames from the Rust producer through shared memory), 
 | App | Discovered | Picture shown | Alongside other clients | Restart call app | Restart Windows | 30-min soak | 720p30 | Producer kill -> slate -> recover | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | Zoom | not tested | | | | | | | | Not installed; deferred by the user. Gate cannot pass without it. |
-| Teams (new) | yes, "Gate0 VCam (Windows Virtual Camera)" | **yes** (settings preview) | yes: worked while the browser probe and other apps held the camera | | | | requested NV12 1920x1080 first, then 1280x720 | | Showed BLACK while my OpenCV probe held the camera (see below). Self-view is mirrored (strip appears top-right). |
+| Teams (new) | yes, "Gate0 VCam (Windows Virtual Camera)" | **yes** (settings preview) | yes: worked while the browser probe and other apps held the camera | not separately confirmed | **yes**: picture present after the restart once the camera was recreated | requested NV12 1920x1080 first, then 1280x720 | | **yes**: producer killed 21:40:43 -> flat grey slate with the strip; restarted 21:41:02 -> coloured picture back by itself, no re-selecting (screenshots) | Showed BLACK while my OpenCV probe held the camera (see below). Self-view is mirrored (strip appears top-right). |
 | Meet (Chrome) | yes | **yes** via the browser probe (a shared getUserMedia client) | yes (with Teams) | | | | 1280x720 @ ~29 fps delivered | | Probe: 28.7 to 29.1 fps, max gap 0.08 to 0.10 s, 0 freezes/slate/undecodable. Real Meet call not yet tried. |
 | Meet (Edge) | probably (second browser, see notes) | yes if the second screenshot was Edge | yes | | | | | | To confirm which browser the second probe window was. |
 | Discord | yes | **yes after re-selecting** the camera | yes | | | | | | Discord (web, discord.com in Chrome) first showed the real webcam although the dropdown said Gate0 VCam; after switching the dropdown away and back it showed our picture. Desktop app not yet tested. |
@@ -156,3 +156,23 @@ Open items at this point:
 - **Elevation:** DLL registration is an elevated, installer-time step; the camera itself can be created without elevation.
 - MSIX experiment (section 8) is done (package identity does not matter for camera creation; DLL registration inside the package untested). Call-app matrix (section 6): restart checks, Zoom, Discord desktop and Edge confirmation still open.
 ## 11. Decision and next step
+
+**Decision: OPEN (not passed).** Strictly by the gate rule ("passes only if every cell for every app passes"), Gate 0 has **not** passed. The evidence nonetheless strongly favours the native Windows 11 virtual camera, so the DirectShow fallback is **not** triggered (the fallback rule is for Zoom or Teams rejecting the camera, and Teams accepts it).
+
+Gate criteria, status:
+| Criterion | Status |
+|---|---|
+| 1. Discovered reliably (first launch, app restart, Windows restart) | Met for Teams, Chrome, a second browser (apparently Edge), Discord web: found and showing the picture, including after a Windows restart once the camera was recreated. Not separately confirmed: explicit quit-and-reopen of each app, Discord desktop. **Zoom untested.** |
+| 2. Streams 30 min with stable frames | Mostly met. 30 min: 29.44 fps, 0 freezes, 0 black/slate/undecodable. **Not met on my own thresholds:** counter gaps 12 to 14% (limit 1%) in every producer run, and one 0.68 s gap in the 30-min run (tab 87% hidden; with the tab visible the worst gap was 0.374 s, under the 0.5 s limit). |
+| 3. Survives producer restart; recovers if killed (slate, then video) | Met. Measured: slate 0.25 s after the kill, live again within 0.3 s; seen in Teams (grey slate, then the picture returned by itself). In-app check done in Teams only. |
+| 4. At least 720p at 30 fps | Met: native 720p delivered at 29.4 to 30.1 fps. |
+| Report items (Windows build, install requirements, elevation, MSIX, failing apps) | Done: sections 1, 3, 8, 9, 10. |
+
+**Blockers before this can be called a pass:**
+1. **Zoom** must be tested (deferred by the user).
+2. **Frame pacing:** 12 to 14% of delivered frames are skipped or repeated. Either a better pacing design brings this under 1%, or the threshold is reviewed on a visual-quality basis. This decision is the owner's.
+3. **Client capacity:** a fourth simultaneous client was refused ("Device in use") for an unknown reason; test with Zoom included.
+
+**Recommended next step:** test Zoom, then write Plan 2 (looper and compositor, pure logic, no camera needed) in parallel with a focused spike on frame pacing, since pacing is the biggest remaining unknown. Plan 3 (the desktop app and the real camera DLL) must implement the spec section 11 requirements (DLL-created section, double buffering, single-instance guard, installer model, client-capacity test).
+
+**Cleanup state:** the spike left a DLL under `C:\Program Files\Gate0VCam\`, an HKLM CLSID key, flag files in `C:\ProgramData\Gate0VCam\`, and the camera, producer and probe server running. `scripts/gate0-unregister.ps1` removes the system parts (needs elevation). The throwaway MSIX test package and both copies of its certificate were already removed.
