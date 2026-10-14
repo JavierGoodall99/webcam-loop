@@ -36,6 +36,7 @@ private:
         _In_ DWORD height,
         _In_ ULONG rgbMask);
 
+    uint32_t m_frameIndex = 0;   // GATE0: counter drawn into the strip
     UINT32 m_width = 0;
     UINT32 m_height = 0;
     GUID m_subType = GUID_NULL;

@@ -29,36 +29,30 @@ namespace winrt::WindowsSample::implementation
         m_dwStreamId = dwStreamId;
         m_allocatorUsage = allocatorUsage;
 
-        const uint32_t NUM_MEDIATYPES = 2;
+        // GATE0: offer several sizes in NV12 and RGB32 (the sample offered only 640x480). First entry is the default.
+        struct Gate0Size { UINT32 w; UINT32 h; };
+        static const Gate0Size kSizes[] = { {1280, 720}, {640, 360}, {1920, 1080}, {640, 480} };
+        const uint32_t NUM_SIZES = ARRAYSIZE(kSizes);
+        const uint32_t NUM_MEDIATYPES = NUM_SIZES * 2;
         wil::unique_cotaskmem_array_ptr<wil::com_ptr_nothrow<IMFMediaType>> mediaTypeList = wilEx::make_unique_cotaskmem_array<wil::com_ptr_nothrow<IMFMediaType>>(NUM_MEDIATYPES);
 
-        // Initialize media type and set the video output media type.
-        wil::com_ptr_nothrow<IMFMediaType> spMediaType;
-        RETURN_IF_FAILED(MFCreateMediaType(&spMediaType));
-        spMediaType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-        spMediaType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
-        spMediaType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-        spMediaType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
-        MFSetAttributeSize(spMediaType.get(), MF_MT_FRAME_SIZE, NUM_IMAGE_COLS, NUM_IMAGE_ROWS);
-        MFSetAttributeRatio(spMediaType.get(), MF_MT_FRAME_RATE, 30, 1);
-        // frame size * pixle bit size * framerate
-        uint32_t bitrate = (uint32_t)(NUM_IMAGE_COLS * 1.5 * NUM_IMAGE_ROWS * 8* 30);
-        spMediaType->SetUINT32(MF_MT_AVG_BITRATE, bitrate);
-        MFSetAttributeRatio(spMediaType.get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-        mediaTypeList[0] = spMediaType.detach();
-
-        RETURN_IF_FAILED(MFCreateMediaType(&spMediaType));
-        spMediaType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-        spMediaType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
-        spMediaType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-        spMediaType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
-        MFSetAttributeSize(spMediaType.get(), MF_MT_FRAME_SIZE, NUM_IMAGE_COLS, NUM_IMAGE_ROWS);
-        MFSetAttributeRatio(spMediaType.get(), MF_MT_FRAME_RATE, 30, 1);
-        // frame size * pixle bit size * framerate
-        bitrate = (uint32_t)(NUM_IMAGE_COLS * NUM_IMAGE_ROWS * 4 * 8* 30);
-        spMediaType->SetUINT32(MF_MT_AVG_BITRATE, bitrate);
-        MFSetAttributeRatio(spMediaType.get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-        mediaTypeList[1] = spMediaType.detach();
+        for (uint32_t i = 0; i < NUM_MEDIATYPES; ++i)
+        {
+            const bool nv12 = (i % 2) == 0;
+            const Gate0Size& sz = kSizes[i / 2];
+            wil::com_ptr_nothrow<IMFMediaType> spMediaType;
+            RETURN_IF_FAILED(MFCreateMediaType(&spMediaType));
+            spMediaType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+            spMediaType->SetGUID(MF_MT_SUBTYPE, nv12 ? MFVideoFormat_NV12 : MFVideoFormat_RGB32);
+            spMediaType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+            spMediaType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+            MFSetAttributeSize(spMediaType.get(), MF_MT_FRAME_SIZE, sz.w, sz.h);
+            MFSetAttributeRatio(spMediaType.get(), MF_MT_FRAME_RATE, 30, 1);
+            uint32_t bitrate = (uint32_t)(sz.w * (nv12 ? 1.5 : 4.0) * sz.h * 8 * 30);
+            spMediaType->SetUINT32(MF_MT_AVG_BITRATE, bitrate);
+            MFSetAttributeRatio(spMediaType.get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+            mediaTypeList[i] = spMediaType.detach();
+        }
 
         RETURN_IF_FAILED(MFCreateAttributes(&m_spAttributes, 10));
         RETURN_IF_FAILED(_SetStreamAttributes(m_spAttributes.get()));

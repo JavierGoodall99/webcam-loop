@@ -2,6 +2,7 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 //
 #include "pch.h"
+#include "../gate0/TestPattern.h"
 
 HRESULT SimpleFrameGenerator::Initialize(_In_ IMFMediaType* pMediaType)
 {
@@ -13,6 +14,7 @@ HRESULT SimpleFrameGenerator::Initialize(_In_ IMFMediaType* pMediaType)
         RETURN_HR_MSG(MF_E_UNSUPPORTED_FORMAT, "Unsupported format: %s", winrt::to_hstring(m_subType).data());
     }
     MFGetAttributeSize(pMediaType, MF_MT_FRAME_SIZE, &m_width, &m_height);
+    m_frameIndex = 0;
 
     return S_OK;
 }
@@ -54,6 +56,7 @@ HRESULT SimpleFrameGenerator::CreateFrame(
         return MF_E_UNSUPPORTED_FORMAT;
     }
 
+    ++m_frameIndex;
     return S_OK;
 }
 
@@ -74,19 +77,8 @@ HRESULT SimpleFrameGenerator::_CreateRGB32Frame(
         return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
     }
 
-    LONGLONG curSysTimeInS = MFGetSystemTime() / (MFTIME)10000000;
-    int offset = curSysTimeInS % height;
-
-    for (unsigned int r = 0; r < height; r++)
-    {
-        uint32_t* p = (uint32_t*)(pBuf + (r * pitch));
-        for (unsigned int c = 0; c < width; c++)
-        {
-            BYTE gray = (BYTE)(r + offset);
-            *p = ((uint32_t)gray << 16 | (uint32_t)gray << 8 | (uint32_t)gray) & rgbMask;
-            p++;
-        }
-    }
+    // GATE0: moving test pattern + counter strip (see gate0/TestPattern.h) replaces the sample's grey gradient.
+    gate0::RenderTestPattern(reinterpret_cast<uint8_t*>(pBuf), static_cast<int>(width), static_cast<int>(height), static_cast<int>(pitch), m_frameIndex, gate0::kMarkerLive);
 
     return S_OK;
 }
