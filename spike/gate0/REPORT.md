@@ -53,6 +53,32 @@ Observed through OpenCV/Media Foundation (index 1, `probe`), requested size -> d
 
 Finding: the Frame Server renders one native size and scales it for clients that ask for another. The product should offer the sizes it can actually render and not rely on per-size negotiation. Remaining per-app choices are recorded in the matrix (Task 7).
 ## 5. Shared-memory / Frame Server findings
+Question: can a normal-user app hand frames to a media source that runs inside the Frame Server service (a different account and session)?
+
+**Experiment A: the app (producer) creates `Global\gate0-vcam-frames`, the DLL opens it.** Fails. A non-elevated process cannot create a `Global\` section: `Access is denied (0x80070005)`. (Normal users lack `SeCreateGlobalPrivilege`.)
+
+**Experiment B: the DLL, running in the Frame Server with service privileges, creates the section; the normal-user app opens it.** Works, with no elevation. The DLL creates `Global\gate0-vcam-frames` with a DACL allowing Everyone full access (spike only; see security note), the Rust producer opens it with `OpenFileMappingW` and writes 1280x720 BGRA frames plus a heartbeat. With no producer the camera shows the slate; the output flips to LIVE 0.3 to 0.9 s after the producer attaches. **This is the IPC scheme for the product.**
+
+Security note: the spike's DACL (Everyone: full access) is unacceptable for a product, because any local process could read the camera frames or write fake ones. The product needs a DACL limited to the interactive user and the service account, and the DLL (a service) must learn which user to allow. Open design item for Plan 3.
+
+Reader behavior measured against the real camera (each is also covered by a unit or contract test):
+
+| Case | Result |
+|---|---|
+| No producer | Slate (flat grey, strip marker SLATE) from the first frame |
+| Producer killed | Slate 0.25 s after the last frame (stale window 250 ms). With the first 1000 ms window the output showed a frozen frame as live for up to 0.94 s. |
+| Producer restarted | LIVE again within about 0.3 s, no re-selecting of the camera |
+| Producer sends wrong size in header | Slate for the whole run; no crash, no garbage |
+| Producer sends bad magic | Slate for the whole run |
+| Writer dies mid-update (sequence stuck odd, heartbeat moving) | Live for about 2 s, then slate within 0.25 s, and it stays slate |
+| Producer alive but no longer writing (hang) | Slate within 0.25 s |
+| New producer attaches to a section a dead writer left with an odd sequence | **Bug found and fixed.** The section outlives the producer (the DLL holds it), so the odd value inverted the parity for every later reader and no read succeeded. The producer now makes the sequence even on attach (contract test `test_new_producer_recovers_a_section_left_with_an_odd_sequence`; RED before the fix). |
+
+Design findings:
+1. **Torn reads caused visible flicker.** The 3.7 MB frame write is long enough that a reader hits a mid-write state in 10 to 20% of reads. The first reader showed a one-frame grey slate every 0.3 to 1 s while live. Fix: hold the last good frame for up to 250 ms on a torn read (`LatestGoodFrame`, unit-tested), after which the 40 s timeline had no flicker. For the product, use double buffering so tears cannot happen.
+2. **Do not block inside `RequestSample`.** Waiting for a fresh producer frame there (to pace the camera to the producer) made delivery fail: 3540 undecodable reads and a 1.0 s gap in 60 s.
+3. **Frame repetition and skipping.** The Frame Server requests about 45 samples per second while 30 are delivered, and the producer writes at its own 30 fps clock. On the producer path the counter shows 3 to 15% skipped values and a similar number of repeats (49/1397 and 253/2056 in two runs). Fps, max gap and freezes were all within thresholds, but **this fails the plan's "dropped <= 1%" threshold** and would be visible as judder. Needs a better pacing design in Plan 3 (for example frame timestamps and a non-blocking, timestamp-based pick of the newest frame).
+4. **Camera robustness (open risk).** A Session camera repeatedly stopped starting streams (`MF_E_HW_MFT_FAILED_START_STREAMING 0xC00D3704`) after repeated short client sessions: the 6th, 2nd and 14th session on three different cameras, within 2 to 5 minutes of repeated open/close. Recreating the camera fixed it each time. The cause is not known. The Frame Server also crashed twice (`0xc0000409`, 16:26 and 16:30) while I was replacing the DLL. See section 7 for whether a single continuous session is stable.
 ## 6. Compatibility matrix
 | App | Discovered | Restart call app | Restart Windows | 30-min soak | 720p30 | Producer restart | Producer kill → slate → recover | Notes |
 |---|---|---|---|---|---|---|---|---|
@@ -62,7 +88,33 @@ Finding: the Frame Server renders one native size and scales it for clients that
 | Meet (Edge) | | | | | | | | |
 | Discord | | | | | | | | |
 ## 7. Probe results (per soak)
+All runs: Python probe through OpenCV/Media Foundation (index 1), 1280x720 requested, camera created non-elevated (Session lifetime). Full per-run output is in `probe-runs.md`. Gate thresholds: freeze events 0, max gap <= 0.5 s, dropped <= 1%, undecodable 0, fps >= 27.
+
+| Run | Variant | Result |
+|---|---|---|
+| 2 min, 1280x720 | built-in pattern | 30.02 fps, max gap 0.10 s, 0 freezes, 0 undecodable. **PASS** (drop check off: the pattern's counter advances ~45/s per sample request) |
+| 1 min, 640x360 (pipeline-scaled) | built-in pattern | 29.96 to 30.01 fps, max gap 0.13 to 0.20 s. **PASS** |
+| 45 s, producer attached late | producer, first DLL | 30.05 fps, max gap 0.14 s, 0 freezes, 0 undecodable. Dropped 48/1397 (3.4%): **fails the drop threshold**; slate for the first 11 s as designed |
+| 60 s, DLL paced to producer (blocking) | producer | **FAIL**: 3540 undecodable reads, max gap 1.0 s. Blocking in `RequestSample` is not viable. |
+| 60 s, no pacing | producer | 30.02 fps, max gap 0.16 s, 0 freezes, 0 undecodable. Dropped 256/2056 (12%): **fails the drop threshold** |
+| 40 s kill/restart timeline | producer + `LatestGoodFrame`, 250 ms stale window | No flicker; SLATE 0.25 s after the kill; LIVE again within 0.3 s of restart; longest identical-LIVE run 0.27 s |
+| 30 min continuous soak | producer + `LatestGoodFrame` | (see below) |
+
+Probe calibration: the same read loop gets 29.0 fps from the physical webcam and 29.9 fps from the virtual camera, so the probe is not the limiting factor. Two earlier runs (about 21 and 25 fps) were discarded: one was limited by the probe itself (fixed test-first), one was judged on counter gaps that are meaningless for the built-in pattern.
 ## 8. MSIX packaging result
 ## 9. Cleanup / uninstall procedure
+Verified so far:
+1. Stop the camera cleanly: `registrar\Registrar.exe --stop` (Remove + Shutdown). The camera is gone from capture enumeration immediately (probe finds no virtual camera).
+2. Replacing the media source DLL: **do not overwrite in place.** The Frame Server keeps the DLL locked, and overwriting still failed after stopping both `FrameServer` and `FrameServerMonitor` (cause unexplained; an old copy stays locked and cannot be deleted). Working method (`scripts/gate0-register.ps1`): copy the new build under a **new file name**, repoint `HKLM\...\CLSID\{...}\InProcServer32` at it, then restart `FrameServerMonitor` and `FrameServer`. The service restart briefly interrupts every camera app, and the script must always restart them (an earlier version aborted and left the camera services stopped).
+3. Full removal: `scripts/gate0-unregister.ps1` (removes cameras via the sample installer, the CLSID key and `C:\Program Files\Gate0VCam`; restarts `FrameServer`). To be run and verified at the end of the spike.
+
+Still to verify (Task 8): abrupt kill of the process that holds a Session camera (does the camera vanish?), double registration, unregister while an app is streaming, behavior after logoff and reboot.
 ## 10. Failures and reasons
+Open items at this point:
+- **Zoom: untested** (not installed; deferred by the user). The gate cannot pass without it.
+- **Drop threshold fails on the producer path** (3 to 15% counter gaps/repeats). Not a delivery failure by the other measures, but a real judder risk. See section 5, finding 3.
+- **Camera robustness:** repeated open/close sessions led to `0xC00D3704` until the camera was recreated. See section 5, finding 4.
+- **Frame Server crashes** (`0xc0000409`, twice) while the DLL was being replaced.
+- **Elevation:** DLL registration is an elevated, installer-time step; the camera itself can be created without elevation.
+- Call-app matrix (section 6) and MSIX experiment (section 8) not yet run.
 ## 11. Decision and next step
