@@ -54,6 +54,8 @@ State-machine behavior to specify in detail in the plan: holds shorter than a mi
 
 `capture → looper → compositor → vcam_bridge → shared memory → camera DLL → call app`. The preview window receives the same frames as the virtual camera.
 
+*Gate 0 correction (see section 11): the shared-memory section must be created by the camera DLL (it runs inside the Frame Server with service privileges), and the app opens it. A normal-user app cannot create a `Global\` section, so "the app creates it" does not work.*
+
 ### 4.3 Virtual camera DLL
 
 A Media Foundation `IMFMediaSource` registered through `MFCreateVirtualCamera`, running under the Windows Frame Server. It reads frames from shared memory and does nothing else. Language (Rust with `windows-rs`, or C++ starting from Microsoft's sample) is decided after the spike.
@@ -61,7 +63,7 @@ A Media Foundation `IMFMediaSource` registered through `MFCreateVirtualCamera`, 
 ### 4.4 Error handling
 
 - Webcam busy or unplugged: output shows a "camera unavailable" slate and the app retries.
-- App crashes or exits: the DLL shows a static slate, never a frozen frame.
+- App crashes or exits: the DLL shows a static slate, never a frozen frame. *(Gate 0: measured at 0.25 s after the last frame with a 250 ms stale window; a 1000 ms window showed a frozen frame as live for up to 0.94 s.)*
 - License expired: the camera passes live video through unchanged; only looping is disabled. A lapsed subscription must never black out a meeting.
 - Memory: the ring buffer is capped; recording stops at the cap.
 
@@ -97,7 +99,9 @@ Marketing copy focuses on convenient webcam control, smooth transitions between 
 
 ## 8. Distribution
 
-Signed MSIX, direct download for v1. Microsoft Store submission is a later step after reviewing store policy for camera software.
+Signed installer, direct download for v1. Microsoft Store submission is a later step after reviewing store policy for camera software.
+
+*Gate 0 correction (see section 11): the camera DLL must be registered under HKLM (an elevated, one-time installer step), and that cannot be done from inside an MSIX package. The app itself runs non-elevated and can be packaged. Store-only distribution is unproven.*
 
 ## 9. Spike gate and dependencies
 
@@ -135,3 +139,24 @@ The spike also records, in a short report:
 - Camera DLL language (after the spike).
 - Webcam capture approach in Rust (direct Media Foundation vs. a crate), to be settled in the plan.
 - Whether to contact the author of `video-pedal` about a license or partnership.
+
+## 11. Gate 0 findings (2026-10-14)
+
+Full evidence is in `spike/gate0/REPORT.md`. Status: **open**, not passed (Zoom untested; frame pacing does not meet the 1% threshold). The native Windows 11 virtual camera approach looks viable. Requirements this adds to the plan:
+
+1. **IPC.** The camera DLL creates the shared section (`Global\...`); the app opens it. A normal-user app cannot create a `Global\` section. The spike's "Everyone: full access" DACL is not acceptable for a product; the plan must restrict it to the interactive user and the service account.
+2. **Frame handoff.** Use double buffering (writer alternates two slots, reader takes the last completed) so tears cannot happen. A single-buffer seqlock caused visible flicker until the reader held the last good frame. The producer must repair an odd/stale sequence on attach (a crashed writer leaves it odd and the DLL keeps the section alive). Never block inside `RequestSample` (it broke delivery).
+3. **Liveness.** Stale window 250 ms or less, then a slate. Wrong size, bad header, stuck writer and hung producer all end in the slate (verified).
+4. **Frame pacing (open, blocking).** The Frame Server asks for about 45 samples/s while the producer writes 30/s; 12 to 14% of delivered frames were skipped or repeated in every producer run. Needs a timestamp-based, non-blocking design and must be re-measured against the 1% threshold.
+5. **Camera lifecycle.** The app creates the camera without elevation (Session lifetime dies with the app; System lifetime survives it and a new instance of the same name and CLSID can remove it). The app must enforce a **single instance**, because a second instance's failed registration destroys the first instance's working camera, and it must detect a vanished camera and recreate it. The camera does not survive a Windows restart.
+6. **Installer.** One elevated, one-time step: copy the DLL and write the COM registration (HKLM). Upgrades install the new DLL under a new file name, repoint the registry, and restart the Frame Server services (an in-place overwrite fails because the Frame Server holds the DLL). The services must always be restarted afterwards.
+7. **Clients.** Shared-mode apps (Teams, Chrome, Edge, Discord) coexist. Tools that open the camera with `MFCreateDeviceSource` (including OpenCV) take it exclusively and lock everything else out; never use one as a test client. Three simultaneous clients worked and a fourth was refused ("Device in use") for an unknown reason; the plan must test client capacity, with Zoom among the clients.
+8. **Formats.** The Frame Server renders one native size and scales for other sizes; 4:3 sizes may crop. Offer the sizes the product can actually render.
+
+## 12. Open items after Gate 0
+
+- Zoom has not been tested. The gate cannot pass without it.
+- The frame-pacing design (item 4) and its threshold.
+- Client-capacity limit (item 7).
+- The DACL for the shared section (item 1).
+- Whether the DLL registration can be shipped through the Store at all (untested).
