@@ -10,6 +10,8 @@ const CANDIDATE_BLOCKS = [8, 4, 12, 6, 16, 2, 3, 5, 7, 9, 10, 11, 13, 14, 15];
 export const MAX_GAP_S = 0.5;
 export const MAX_DROP_FRACTION = 0.01;
 export const MIN_FPS = 27.0;
+export const BIG_GAP_S = 0.25;
+export const MAX_BIG_GAPS = 50;
 
 function readValue(row, block) {
   // Returns the 48-bit value as [high16, low32], or null if the row is too narrow for this block size.
@@ -41,12 +43,17 @@ export function decodeStripRow(row, width) {
 // samples: [t_seconds, marker|null, counter|null]
 export function summarize(samples, freezeThresholdS = 1.0) {
   const out = { frames: samples.length, durationS: 0, fps: 0, maxGapS: 0, dropped: 0, repeats: 0,
-                freezeEvents: 0, slateFrames: 0, invalidFrames: 0, counterResets: 0 };
+                freezeEvents: 0, slateFrames: 0, invalidFrames: 0, counterResets: 0, bigGaps: [] };
   if (!samples.length) return out;
   out.durationS = samples[samples.length - 1][0] - samples[0][0];
   if (samples.length > 1 && out.durationS > 0) {
     out.fps = (samples.length - 1) / out.durationS;
-    for (let i = 1; i < samples.length; i++) out.maxGapS = Math.max(out.maxGapS, samples[i][0] - samples[i - 1][0]);
+    for (let i = 1; i < samples.length; i++) {
+      const gap = samples[i][0] - samples[i - 1][0];
+      out.maxGapS = Math.max(out.maxGapS, gap);
+      // [when the gap began, how long it was]; capped so a bad run cannot flood the saved result
+      if (gap > BIG_GAP_S && out.bigGaps.length < MAX_BIG_GAPS) out.bigGaps.push([samples[i - 1][0], gap]);
+    }
   }
   let prev = null;
   let runStart = null;

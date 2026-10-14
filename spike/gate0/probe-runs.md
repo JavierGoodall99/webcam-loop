@@ -36,3 +36,7 @@ Each entry is appended by vcam_probe.py. Two earlier runs were discarded: the fi
 - camera index 1, delivered size 1280x720
 - frames=1800, duration_s=59.922, fps=30.022, max_gap_s=0.159, dropped=256, repeats=253, freeze_events=0, slate_frames=130, invalid_frames=0, counter_resets=0
 - gate: FAIL — dropped 256/2056 > 1%
+
+## Browser probe (shared client) runs
+- 1 min, Chrome, rVFC: 29.32 fps, max gap 0.10 s, dropped 49/484 (10%), 0 freeze/slate/undecodable.
+- 30 min, Chrome, MediaStreamTrackProcessor, tab hidden 87%: 29.44 fps, max gap 0.679 s, dropped 7456/60464 (12.3%), repeats 6446, 0 freeze/slate/undecodable.

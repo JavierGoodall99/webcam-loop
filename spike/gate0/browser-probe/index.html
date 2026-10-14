@@ -82,6 +82,7 @@ function render(final = false) {
     ['elapsed', s.durationS.toFixed(1) + ' s'], ['frames', s.frames], ['fps', s.fps.toFixed(2)],
     ['max gap', s.maxGapS.toFixed(3) + ' s'], ['dropped (counter gaps)', s.dropped], ['repeats', s.repeats],
     ['freeze events', s.freezeEvents], ['slate frames', s.slateFrames], ['undecodable frames', s.invalidFrames],
+    ['gaps over 0.25 s', s.bigGaps.length ? s.bigGaps.map(([t, g]) => `${g.toFixed(2)}s at ${t.toFixed(0)}s`).slice(-6).join(', ') : 'none'],
     ['tab hidden so far', hiddenTotal().toFixed(1) + ' s'], ['frame source', frameSource],
     ['gate', fails.length ? `<span class="fail">FAIL: ${fails.join('; ')}</span>` : '<span class="pass">PASS so far</span>'],
   ];

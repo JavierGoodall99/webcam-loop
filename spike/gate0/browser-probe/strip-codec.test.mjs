@@ -71,3 +71,18 @@ test('empty input is safe', () => {
   assert.equal(s.frames, 0);
   assert.equal(s.fps, 0);
 });
+
+test('large gaps are listed with the time they started, so a long run explains itself', () => {
+  const base = steady(2);                                              // 0 .. 1.97 s
+  const afterGap = steady(1, 30, 60).map(([t, m, c]) => [t + 2.7, m, c]); // resumes 0.73 s after the last frame
+  const s = summarize(base.concat(afterGap));
+  assert.equal(s.bigGaps.length, 1);
+  assert.ok(Math.abs(s.bigGaps[0][0] - 1.967) < 0.01);               // when the gap began
+  assert.ok(Math.abs(s.bigGaps[0][1] - 0.733) < 0.01);               // how long it was
+  assert.equal(summarize(steady()).bigGaps.length, 0);
+});
+
+test('the list of large gaps is capped so a bad run cannot flood the result', () => {
+  const noisy = Array.from({ length: 200 }, (_, i) => [i * 0.5, L, i]);   // 0.5 s between every frame
+  assert.ok(summarize(noisy).bigGaps.length <= 50);
+});
