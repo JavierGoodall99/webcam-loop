@@ -6,6 +6,7 @@ pub mod codec;
 pub mod compositor;
 pub mod config;
 pub mod frame;
+pub mod seam;
 
 pub use codec::{Codec, CodecError, RawCodec};
 pub use compositor::{blend, blend_into, BlendError, ALPHA_ONE};
