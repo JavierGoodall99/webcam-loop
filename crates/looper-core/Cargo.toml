@@ -1,0 +1,8 @@
+[package]
+name = "looper-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Pure-logic core of the webcam loop product: frame blending and the record/loop/return state machine. No I/O, no dependencies."
+
+[dependencies]
