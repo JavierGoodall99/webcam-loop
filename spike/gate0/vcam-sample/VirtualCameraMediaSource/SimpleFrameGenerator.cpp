@@ -3,6 +3,19 @@
 //
 #include "pch.h"
 #include "../gate0/TestPattern.h"
+#ifdef GATE0_USE_PRODUCER
+#include <vector>
+#include "../gate0/SharedFrame.h"
+#include "../gate0/SharedSection.h"
+#ifndef GATE0_SECTION_NAME
+#define GATE0_SECTION_NAME L"Global\\gate0-vcam-frames"
+// "Global\gate0-vcam-frames" is 24 characters plus the terminator; catches a lost backslash escape.
+static_assert(sizeof(GATE0_SECTION_NAME) == 25 * sizeof(wchar_t), "GATE0_SECTION_NAME escape error");
+#endif
+#ifndef GATE0_DLL_CREATES
+#define GATE0_DLL_CREATES false     // experiment A: producer creates the section; B: build with /DGATE0_DLL_CREATES=true
+#endif
+#endif
 
 HRESULT SimpleFrameGenerator::Initialize(_In_ IMFMediaType* pMediaType)
 {
@@ -77,8 +90,44 @@ HRESULT SimpleFrameGenerator::_CreateRGB32Frame(
         return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
     }
 
+#ifdef GATE0_USE_PRODUCER
+    {
+        // Producer mode: copy the producer's 1280x720 frame (scaled to the negotiated size) or show a flat slate. Never a stale frame.
+        constexpr uint32_t kSrcW = 1280, kSrcH = 720;
+        constexpr size_t kMapBytes = gate0::kHeaderBytes + static_cast<size_t>(kSrcW) * kSrcH * 4;
+        static gate0::SharedSection s_section;
+        static std::vector<uint8_t> s_src(static_cast<size_t>(kSrcW) * kSrcH * 4);
+        uint64_t producerCounter = 0;
+        gate0::ReadStatus st = gate0::ReadStatus::BadHeader;
+        if (s_section.EnsureOpen(GATE0_SECTION_NAME, kMapBytes, GATE0_DLL_CREATES))
+        {
+            for (int attempt = 0; attempt < 3; ++attempt)
+            {
+                st = gate0::TryReadFrame(s_section.base(), s_section.size(), GetTickCount64(), kSrcW, kSrcH, s_src.data(), kSrcW * 4, &producerCounter);
+                if (st != gate0::ReadStatus::Torn) break;
+            }
+        }
+        if (st == gate0::ReadStatus::Ok)
+        {
+            for (DWORD y = 0; y < height; ++y)
+            {
+                const uint32_t* srcRow = reinterpret_cast<const uint32_t*>(s_src.data()) + static_cast<size_t>(y * kSrcH / height) * kSrcW;
+                uint32_t* dstRow = reinterpret_cast<uint32_t*>(pBuf + static_cast<size_t>(y) * pitch);
+                for (DWORD x = 0; x < width; ++x) dstRow[x] = srcRow[x * kSrcW / width];
+            }
+            gate0::DrawCounterStrip(pBuf, static_cast<int>(width), static_cast<int>(height), static_cast<int>(pitch),
+                                    static_cast<uint32_t>(producerCounter), gate0::kMarkerLive);
+        }
+        else
+        {
+            gate0::RenderTestPattern(pBuf, static_cast<int>(width), static_cast<int>(height), static_cast<int>(pitch), m_frameIndex, gate0::kMarkerSlate);
+        }
+    }
+#else
     // GATE0: moving test pattern + counter strip (see gate0/TestPattern.h) replaces the sample's grey gradient.
     gate0::RenderTestPattern(reinterpret_cast<uint8_t*>(pBuf), static_cast<int>(width), static_cast<int>(height), static_cast<int>(pitch), m_frameIndex, gate0::kMarkerLive);
+
+#endif
 
     return S_OK;
 }

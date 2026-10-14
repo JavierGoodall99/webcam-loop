@@ -22,3 +22,4 @@ Release/
 .superpowers/
 spike/gate0/vcam-sample/packages/
 spike/gate0/vcam-sample/*/packages
+spike/gate0/build/
