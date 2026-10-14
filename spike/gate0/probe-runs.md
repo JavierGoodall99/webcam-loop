@@ -40,3 +40,4 @@ Each entry is appended by vcam_probe.py. Two earlier runs were discarded: the fi
 ## Browser probe (shared client) runs
 - 1 min, Chrome, rVFC: 29.32 fps, max gap 0.10 s, dropped 49/484 (10%), 0 freeze/slate/undecodable.
 - 30 min, Chrome, MediaStreamTrackProcessor, tab hidden 87%: 29.44 fps, max gap 0.679 s, dropped 7456/60464 (12.3%), repeats 6446, 0 freeze/slate/undecodable.
+- 10 min, Chrome visible, MediaStreamTrackProcessor: 29.44 fps, max gap 0.374 s, dropped 2909/20572 (14.1%), repeats 2572, 0 freeze/slate/undecodable, gaps >0.25s: 0.32s@240s 0.34s@510s 0.37s@514s.
