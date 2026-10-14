@@ -25,6 +25,10 @@ def make_server(port: int, results_dir: pathlib.Path):
     results_dir.mkdir(parents=True, exist_ok=True)
 
     class Handler(SimpleHTTPRequestHandler):
+        # Python's default map has no entry for .mjs on Windows (it falls back to text/plain), and browsers refuse
+        # to run an ES module with that content type.
+        extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".mjs": "text/javascript", ".js": "text/javascript"}
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(HERE), **kwargs)
 

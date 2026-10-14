@@ -61,3 +61,10 @@ def test_rejects_oversized_bodies(running):
 def test_only_localhost_binding(running):
     srv, _ = running
     assert srv.server_address[0] == "127.0.0.1"
+
+
+def test_javascript_modules_are_served_with_a_javascript_content_type(running):
+    # Browsers refuse to run an ES module served as text/plain; Python's default map on Windows has no entry for .mjs.
+    srv, _ = running
+    r = urllib.request.urlopen(url(srv, "/strip-codec.mjs"))
+    assert r.headers.get_content_type() in ("text/javascript", "application/javascript")

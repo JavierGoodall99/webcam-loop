@@ -27,6 +27,7 @@
   <label>Minutes <input id="minutes" type="number" min="0.1" step="0.1" value="1" style="width:5em"></label>
   <label>Label <input id="label" value="browser-run"></label>
   <label><input id="drops" type="checkbox" checked> gate on dropped frames</label>
+  <button id="refresh">Refresh cameras</button>
   <button id="start">Start</button><button id="stop" disabled>Stop &amp; save</button>
 </div>
 <div id="state">Pick the camera (the label shows after permission is granted) and press Start.</div>
@@ -43,12 +44,25 @@ if (params.get('drops') === '0') $('drops').checked = false;
 let stream = null, samples = [], t0 = 0, running = false, timer = null, canvas = null, ctx = null;
 
 async function loadDevices() {
-  // Labels are only visible after one permission grant.
-  try { (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach((t) => t.stop()); } catch (e) { $('state').textContent = 'Camera permission needed: ' + e.message; }
+  // Device labels are only visible after one permission grant, so ask first and say what we are waiting for.
+  $('state').textContent = 'Requesting camera permission: click Allow in the browser prompt (next to the address bar).';
+  const hint = setTimeout(() => { $('state').textContent += ' Still waiting: if there is no prompt, click the camera icon in the address bar and allow it, then press Refresh.'; }, 8000);
+  try {
+    (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach((t) => t.stop());
+  } catch (e) {
+    clearTimeout(hint);
+    $('state').textContent = `Camera permission failed (${e.name}: ${e.message}). Allow the camera for this page, then press Refresh.`;
+  }
+  clearTimeout(hint);
   const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
-  $('cam').innerHTML = devs.map((d) => `<option value="${d.deviceId}">${d.label || d.deviceId}</option>`).join('');
+  $('cam').innerHTML = devs.map((d) => `<option value="${d.deviceId}">${d.label || '(unnamed) ' + d.deviceId.slice(0, 8)}</option>`).join('');
   const gate = devs.find((d) => /gate0/i.test(d.label));
-  if (gate) $('cam').value = gate.deviceId;
+  if (gate) {
+    $('cam').value = gate.deviceId;
+    $('state').textContent = `Ready: found "${gate.label}". Press Start.`;
+  } else if (devs.length) {
+    $('state').textContent = `No camera named Gate0 found. Cameras seen: ${devs.map((d) => d.label || '(unnamed)').join(', ')}. Is the camera running?`;
+  }
   if (params.get('autostart') === '1' && gate) start();
 }
 
@@ -110,6 +124,7 @@ async function stop() {
 
 $('start').onclick = () => start().catch((e) => { $('state').textContent = 'Start failed: ' + e.name + ' ' + e.message; });
 $('stop').onclick = stop;
+$('refresh').onclick = () => loadDevices();
 loadDevices();
 </script>
 </body>
