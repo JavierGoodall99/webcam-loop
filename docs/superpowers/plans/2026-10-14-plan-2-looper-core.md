@@ -2259,9 +2259,9 @@ Expected: ten lines starting `[0] caught` through `[9] caught` and `10/10 mutati
 
 - [ ] **Step 6: Write the README**
 
-`crates/looper-core/README.md`:
+`crates/looper-core/README.md` (this file contains code fences, so it is shown inside a four-backtick fence):
 
-```markdown
+````markdown
 # looper-core
 
 The pure-logic core of the webcam loop product: the record / loop / return state machine and the frame blending it
@@ -2335,7 +2335,7 @@ cargo run --release --example bench
 
 Capture, hotkeys, the virtual camera, a real frame codec, and anything that touches Windows. The frame type is BGRA,
 8 bits per channel, top-down with no row padding, matching the shared-memory frame layout used by the camera DLL.
-```
+````
 
 Replace the timing numbers in the README table with the ones from Step 4 if they differ.
 
