@@ -39,3 +39,23 @@ def test_unknown_marker_returns_none():
     rng = np.random.default_rng(2)
     noise = rng.integers(0, 256, (720, 1280, 3), dtype=np.uint8)
     assert decode_strip(noise) is None
+
+
+def test_decoding_reads_only_the_strip_rows_so_the_probe_keeps_up_with_30fps():
+    import time
+    img = canvas(encode_strip(99), w=1920, h=1080)
+    start = time.perf_counter()
+    for _ in range(300):
+        assert decode_strip(img) == (MARKER_LIVE, 99)
+    per_frame_ms = (time.perf_counter() - start) / 300 * 1000
+    assert per_frame_ms < 2.0, f"decode takes {per_frame_ms:.1f} ms per 1080p frame"
+
+
+@pytest.mark.parametrize("scale,interp", [(0.5, "area"), (0.75, "linear"), (1.5, "linear"), (0.5, "linear")])
+def test_decodes_a_strip_that_the_camera_pipeline_scaled(scale, interp):
+    # The Frame Server renders one native size and scales it for clients that ask for another.
+    import cv2
+    mode = cv2.INTER_AREA if interp == "area" else cv2.INTER_LINEAR
+    img = canvas(encode_strip(31337), w=1280, h=720)
+    scaled = cv2.resize(img, None, fx=scale, fy=scale, interpolation=mode)
+    assert decode_strip(scaled) == (MARKER_LIVE, 31337)

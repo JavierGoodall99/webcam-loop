@@ -50,14 +50,15 @@ def summarize(samples, freeze_threshold_s=1.0):
     return out
 
 
-def gate_failures(s):
+def gate_failures(s, check_drops=True):
+    """check_drops=False for sources whose counter is not paced to delivery (the built-in pattern over-generates)."""
     fails = []
     if s["freeze_events"] > 0:
         fails.append(f"freeze events: {s['freeze_events']}")
     if s["max_gap_s"] > MAX_GAP_S:
         fails.append(f"max gap {s['max_gap_s']:.2f}s > {MAX_GAP_S}s")
     expected = s["frames"] + s["dropped"]
-    if expected and s["dropped"] / expected > MAX_DROP_FRACTION:
+    if check_drops and expected and s["dropped"] / expected > MAX_DROP_FRACTION:
         fails.append(f"dropped {s['dropped']}/{expected} > {MAX_DROP_FRACTION:.0%}")
     if s["invalid_frames"] > 0:
         fails.append(f"undecodable frames: {s['invalid_frames']}")

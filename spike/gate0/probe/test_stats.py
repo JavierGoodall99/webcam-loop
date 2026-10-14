@@ -46,3 +46,13 @@ def test_large_gap_fails_the_gate():
 def test_empty_input_is_safe():
     s = summarize([])
     assert s["frames"] == 0 and s["fps"] == 0.0
+
+
+def test_dropped_check_can_be_turned_off_for_sources_that_overgenerate():
+    # The built-in pattern advances its counter on every sample request (~45/s) while only 30 fps are delivered,
+    # so counter gaps there are not lost frames. Delivery is still judged by fps, gap and freeze.
+    over = [(i / 30, L, i * 3) for i in range(90)]
+    s = summarize(over)
+    assert s["dropped"] > 0
+    assert any("dropped" in f for f in gate_failures(s))
+    assert gate_failures(s, check_drops=False) == []

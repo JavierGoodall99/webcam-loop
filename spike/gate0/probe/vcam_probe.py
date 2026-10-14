@@ -44,6 +44,8 @@ def main():
     ap.add_argument("--out", default=None, help="append a Markdown summary to this file")
     ap.add_argument("--label", default="run")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--no-drop-gate", action="store_true",
+                    help="do not fail on counter gaps (built-in pattern advances its counter per sample request, ~45/s)")
     args = ap.parse_args()
 
     index = args.index if args.index is not None else find_virtual_camera(args.width, args.height, args.fps)
@@ -70,7 +72,7 @@ def main():
     cap.release()
 
     summary = summarize(samples)
-    failures = gate_failures(summary)
+    failures = gate_failures(summary, check_drops=not args.no_drop_gate)
     print(json.dumps({"label": args.label, "index": index, "size": actual, **summary, "failures": failures}, indent=2))
     if args.out:
         with open(args.out, "a", encoding="utf-8") as f:
