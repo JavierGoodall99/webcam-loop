@@ -111,18 +111,46 @@ Reading the 30-minute soak: the camera ran for the full 30 minutes without a fre
 
 Probe calibration: the same read loop gets 29.0 fps from the physical webcam and 29.9 fps from the virtual camera, so the probe is not the limiting factor. Two earlier runs (about 21 and 25 fps) were discarded: one was limited by the probe itself (fixed test-first), one was judged on counter gaps that are meaningless for the built-in pattern.
 ## 8. MSIX packaging result
+Package: `msix/AppxManifest.xml` (a full-trust app wrapping `Registrar.exe`, with an execution alias `gate0registrar.exe`). Built with `makeappx`, signed with a throwaway self-signed certificate (`CN=Gate0Spike`).
+
+What worked:
+- The package builds and signs once the manifest is valid. Two fixes were needed: no `--` inside an XML comment, and the `windows.appExecutionAlias` extension belongs to the `uap3` schema (not `uap5`).
+- A self-signed package installs **without elevation, but only after its certificate is trusted in the machine's Trusted People store, which needs one elevated step.** (A product would use a real code-signing certificate or the Store.) After testing, the package, alias, machine trust and my personal copy of the certificate were all removed and verified gone.
+- A packaged process really ran from `C:\Program Files\WindowsApps\Gate0.VCamSpike_...\Registrar.exe`, so the tests below had package identity.
+
+Camera creation, all non-elevated, **identical whether packaged or not**:
+
+| Lifetime / access | Unpackaged | Packaged |
+|---|---|---|
+| Session, current user | created | created |
+| System, current user | created | created |
+| Session, all users | `0x80070005` | `0x80070005` |
+| System, all users | `0x80070005` | `0x80070005` |
+
+So **package identity is not needed to create a camera** (the sample's "not running in app package" warning was misleading; the only thing that needed elevation was the sample installer's own extra bookkeeping). All-users cameras need elevation either way. A packaged app's camera streams through the HKLM-registered DLL and is removed cleanly.
+
+Not tested (stated plainly): whether the DLL's COM registration can be declared inside the package and still be found by the Frame Server (E3). I did not run it because the Frame Server runs outside the package, and Microsoft's own sample deploys the DLL with an MSI while a packaged app creates the cameras. Treat Store-only distribution as **unproven**. The model that works today is: an elevated one-time installer step registers the DLL (HKLM), and a normal non-elevated app creates and feeds the camera. That fits the spec's "direct download first, Store later".
 ## 9. Cleanup / uninstall procedure
 Verified so far:
 1. Stop the camera cleanly: `registrar\Registrar.exe --stop` (Remove + Shutdown). The camera is gone from capture enumeration immediately (probe finds no virtual camera).
 2. Replacing the media source DLL: **do not overwrite in place.** The Frame Server keeps the DLL locked, and overwriting still failed after stopping both `FrameServer` and `FrameServerMonitor` (cause unexplained; an old copy stays locked and cannot be deleted). Working method (`scripts/gate0-register.ps1`): copy the new build under a **new file name**, repoint `HKLM\...\CLSID\{...}\InProcServer32` at it, then restart `FrameServerMonitor` and `FrameServer`. The service restart briefly interrupts every camera app, and the script must always restart them (an earlier version aborted and left the camera services stopped).
 3. Full removal: `scripts/gate0-unregister.ps1` (removes cameras via the sample installer, the CLSID key and `C:\Program Files\Gate0VCam`; restarts `FrameServer`). To be run and verified at the end of the spike.
 
-Still to verify (Task 8): abrupt kill of the process that holds a Session camera (does the camera vanish?), double registration, unregister while an app is streaming, behavior after logoff and reboot.
+Lifecycle results (all non-elevated, camera named "Gate0 VCam"):
+| Case | Result |
+|---|---|
+| Abrupt kill (`Stop-Process -Force`) of the process that created a **Session** camera | The camera disappears immediately; nothing is left behind. |
+| Abrupt kill of the process that created a **System** camera | The camera **persists** and keeps streaming (frames or slate). A new instance of the same tool (same name and source CLSID) can then remove it with `Remove()`, because the camera's identity is derived from them. |
+| Second instance registering the same camera while the first is running | The second is refused (`Start failed 0xC00D36B2`) **and the first instance's camera is destroyed even though its process is alive** (confirmed: first alone streams; after the failed second attempt the camera is gone and the first's later `Remove` returns `0xC00D36D5`). The real app must enforce a single instance before touching the camera, and must notice a vanished camera and recreate it. |
+| Camera removed while a client is streaming from it | The client's frames stop (about 3.6 s into its run) and it does not hang. |
+| Replacing the DLL | See item 2 above (new file name, repoint HKLM, restart the camera services). |
+
+Still to verify: behavior across logoff and a Windows restart (a System camera is documented to last until restart).
 ## 10. Failures and reasons
 Open items at this point:
 - **Zoom: untested** (not installed; deferred by the user). The gate cannot pass without it.
 - **Drop threshold fails on the producer path** (3 to 15% counter gaps/repeats). Not a delivery failure by the other measures, but a real judder risk. See section 5, finding 3.
 - **Frame Server crashes** (`0xc0000409`, twice) while the DLL was being replaced.
 - **Elevation:** DLL registration is an elevated, installer-time step; the camera itself can be created without elevation.
-- Call-app matrix (section 6) and MSIX experiment (section 8) not yet run.
+- MSIX experiment (section 8) is done (package identity does not matter for camera creation; DLL registration inside the package untested). Call-app matrix (section 6): restart checks, Zoom, Discord desktop and Edge confirmation still open.
 ## 11. Decision and next step
