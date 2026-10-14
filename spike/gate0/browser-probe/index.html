@@ -42,6 +42,15 @@ for (const k of ['minutes', 'label']) if (params.has(k)) $(k).value = params.get
 if (params.get('drops') === '0') $('drops').checked = false;
 
 let stream = null, samples = [], t0 = 0, running = false, timer = null, canvas = null, ctx = null;
+let frameSource = '', hiddenS = 0, hiddenSince = null;
+
+// Record how long the tab was hidden so a run that was disturbed can be recognised afterwards.
+document.addEventListener('visibilitychange', () => {
+  if (!running) return;
+  if (document.hidden) hiddenSince = performance.now();
+  else if (hiddenSince !== null) { hiddenS += (performance.now() - hiddenSince) / 1000; hiddenSince = null; }
+});
+const hiddenTotal = () => hiddenS + (hiddenSince !== null ? (performance.now() - hiddenSince) / 1000 : 0);
 
 async function loadDevices() {
   // Device labels are only visible after one permission grant, so ask first and say what we are waiting for.
@@ -73,6 +82,7 @@ function render(final = false) {
     ['elapsed', s.durationS.toFixed(1) + ' s'], ['frames', s.frames], ['fps', s.fps.toFixed(2)],
     ['max gap', s.maxGapS.toFixed(3) + ' s'], ['dropped (counter gaps)', s.dropped], ['repeats', s.repeats],
     ['freeze events', s.freezeEvents], ['slate frames', s.slateFrames], ['undecodable frames', s.invalidFrames],
+    ['tab hidden so far', hiddenTotal().toFixed(1) + ' s'], ['frame source', frameSource],
     ['gate', fails.length ? `<span class="fail">FAIL: ${fails.join('; ')}</span>` : '<span class="pass">PASS so far</span>'],
   ];
   $('stats').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
@@ -92,18 +102,41 @@ async function start() {
   await v.play();
   canvas = new OffscreenCanvas(settings.width, settings.height);
   ctx = canvas.getContext('2d', { willReadFrequently: true });
-  samples = []; running = true; t0 = performance.now();
+  samples = []; running = true; t0 = performance.now(); hiddenS = 0; hiddenSince = document.hidden ? performance.now() : null;
   $('start').disabled = true; $('stop').disabled = false;
-  $('state').textContent = `Running: ${track.label} at ${settings.width}x${settings.height} @ ${settings.frameRate} fps`;
-  const onFrame = (now) => {
-    if (!running) return;
-    ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+  const decodeInto = (drawable, tSeconds) => {
+    ctx.drawImage(drawable, 0, 0, canvas.width, canvas.height);
     const row = ctx.getImageData(0, 1, canvas.width, 1).data;
     const d = decodeStripRow(row, canvas.width);
-    samples.push([(now - t0) / 1000, d ? d.marker : null, d ? d.counter : null]);
-    v.requestVideoFrameCallback(onFrame);
+    samples.push([tSeconds, d ? d.marker : null, d ? d.counter : null]);
   };
-  v.requestVideoFrameCallback(onFrame);
+  if (typeof MediaStreamTrackProcessor !== 'undefined') {
+    // Reads camera frames straight from the track with the camera's own capture timestamps. Unlike
+    // requestVideoFrameCallback this keeps delivering when the tab is hidden, minimized or covered.
+    frameSource = 'MediaStreamTrackProcessor (capture timestamps)';
+    (async () => {
+      const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+      let first = null;
+      while (running) {
+        const { value: frame, done } = await reader.read();
+        if (done) break;
+        try {
+          if (first === null) first = frame.timestamp;
+          decodeInto(frame, (frame.timestamp - first) / 1e6);
+        } finally { frame.close(); }
+      }
+      reader.cancel().catch(() => {});
+    })();
+  } else {
+    frameSource = 'requestVideoFrameCallback (stops when the tab is hidden!)';
+    const onFrame = (now) => {
+      if (!running) return;
+      decodeInto(v, (now - t0) / 1000);
+      v.requestVideoFrameCallback(onFrame);
+    };
+    v.requestVideoFrameCallback(onFrame);
+  }
+  $('state').textContent = `Running: ${track.label} at ${settings.width}x${settings.height} @ ${settings.frameRate} fps. Frame source: ${frameSource}`;
   timer = setInterval(() => { render(); if ((performance.now() - t0) / 60000 >= Number($('minutes').value)) stop(); }, 1000);
 }
 
@@ -114,7 +147,7 @@ async function stop() {
   const { summary, failures } = render(true);
   const payload = { label: $('label').value, camera: $('cam').selectedOptions[0]?.textContent, size: $('size').value,
                     minutesRequested: Number($('minutes').value), checkDrops: $('drops').checked,
-                    userAgent: navigator.userAgent, summary, failures };
+                    userAgent: navigator.userAgent, frameSource, hiddenSeconds: hiddenTotal(), summary, failures };
   try {
     const r = await fetch('/result?label=' + encodeURIComponent($('label').value), { method: 'POST', body: JSON.stringify(payload) });
     $('state').textContent = r.ok ? 'Stopped. Result saved by the local server.' : 'Stopped. Save failed: ' + r.status;
